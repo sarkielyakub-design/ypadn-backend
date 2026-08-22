@@ -18,6 +18,12 @@ from reportlab.pdfbase.pdfmetrics import stringWidth
 # PROJECT PATHS
 # ============================================================
 
+# This file:
+#
+# app/utils/membership_card_generator.py
+#
+# ../../ points to the project root.
+#
 BASE_DIR = os.path.abspath(
     os.path.join(
         os.path.dirname(__file__),
@@ -43,8 +49,15 @@ ASSET_DIR = os.path.join(
     "membership",
 )
 
-os.makedirs(CARD_DIR, exist_ok=True)
-os.makedirs(ASSET_DIR, exist_ok=True)
+os.makedirs(
+    CARD_DIR,
+    exist_ok=True,
+)
+
+os.makedirs(
+    ASSET_DIR,
+    exist_ok=True,
+)
 
 
 # ============================================================
@@ -71,24 +84,29 @@ CHAIRMAN_TITLE = "CHAIRMAN, YPADN"
 # ============================================================
 
 NAVY = HexColor("#0B2347")
+
 GREEN = HexColor("#087A3D")
+
 DARK_GREEN = HexColor("#075B30")
+
 WHITE = colors.white
 
 
 # ============================================================
 # CARD SIZE
 #
-# Artwork ratio:
+# Original artwork:
 # 1536 x 1024
+#
+# Ratio:
+# 3 : 2
 #
 # PDF:
 # 750 x 500
-#
-# Same 3:2 ratio.
 # ============================================================
 
 WIDTH = 750
+
 HEIGHT = 500
 
 
@@ -123,6 +141,7 @@ FRONT_FALLBACKS = [
         "id_front_bg.png",
     ),
 ]
+
 
 BACK_FALLBACKS = [
     os.path.join(
@@ -171,13 +190,15 @@ def resolve_asset(
 ):
     """
     Resolve the primary asset first.
-    If unavailable, use a fallback.
+
+    If unavailable, try fallback assets.
     """
 
     if primary and os.path.isfile(primary):
         return primary
 
     for path in fallbacks or []:
+
         if path and os.path.isfile(path):
             return path
 
@@ -193,15 +214,16 @@ def draw_background(
     image_path,
 ):
     """
-    Draw the card background.
+    Draw the membership-card background.
     """
 
     image_path = resolve_file_path(
         image_path
     )
 
-    if not image_path or not os.path.isfile(
-        image_path
+    if (
+        not image_path
+        or not os.path.isfile(image_path)
     ):
         raise FileNotFoundError(
             "Membership card background not found: "
@@ -230,12 +252,13 @@ def draw_fitted_text(
     y,
     max_width,
     font="Helvetica-Bold",
-    font_size=10,
+    font_size=8,
     min_font_size=6,
     color=NAVY,
 ):
     """
-    Draw text with automatic font-size reduction.
+    Draw text while automatically reducing the font size
+    when the value is wider than the available space.
     """
 
     text = str(
@@ -286,9 +309,6 @@ def draw_member_photo(
 ):
     """
     Draw the member passport photograph.
-
-    Coordinates are calibrated for the NEW
-    card_front_background.png.
     """
 
     passport = getattr(
@@ -302,26 +322,32 @@ def draw_member_photo(
     )
 
     if not passport:
+
         print(
             "⚠️ Member has no passport photo."
         )
+
         return
 
     if not os.path.isfile(passport):
+
         print(
             "⚠️ Passport photo not found: "
             f"{passport}"
         )
+
         return
 
     # ========================================================
-    # NEW FRONT CARD PHOTO POSITION
+    # PHOTO POSITION
     # ========================================================
 
     x = 40
+
     y = 58
 
     photo_width = 180
+
     photo_height = 205
 
     try:
@@ -398,32 +424,43 @@ def draw_member_qr(
     qr_path,
 ):
     """
-    Draw the real member QR code over the
-    QR placeholder in the new artwork.
+    Draw the member QR code.
+
+    If qr_path is None or empty, nothing is drawn.
+    This allows the front background to remain QR-free.
     """
 
     qr_path = resolve_file_path(
         qr_path
     )
 
+    # --------------------------------------------------------
+    # No QR supplied
+    # --------------------------------------------------------
+
     if not qr_path:
-        print(
-            "⚠️ No QR code path supplied."
-        )
+
         return
 
+    # --------------------------------------------------------
+    # QR file does not exist
+    # --------------------------------------------------------
+
     if not os.path.isfile(qr_path):
+
         print(
             "⚠️ QR code not found: "
             f"{qr_path}"
         )
+
         return
 
     # ========================================================
-    # NEW FRONT CARD QR POSITION
+    # QR POSITION
     # ========================================================
 
     x = 610
+
     y = 205
 
     size = 92
@@ -477,6 +514,11 @@ def draw_member_qr(
 def get_joined_date(
     member,
 ):
+    """
+    Return member joined date as:
+        22 August 2026
+    """
+
     created_at = getattr(
         member,
         "created_at",
@@ -489,15 +531,16 @@ def get_joined_date(
             created_at,
             datetime,
         ):
+
             return created_at.strftime(
                 "%d %B %Y"
             )
 
-        # Handle date-like SQLAlchemy values
         if hasattr(
             created_at,
             "strftime",
         ):
+
             return created_at.strftime(
                 "%d %B %Y"
             )
@@ -518,45 +561,48 @@ def draw_member_information(
     """
     Draw ONLY dynamic member values.
 
-    The labels are already part of the
-    card_front_background.png artwork.
+    The labels already exist inside:
+        card_front_background.png
 
-    IMPORTANT:
-    All values use the same value column.
+    IMPORTANT ALIGNMENT:
+
+        LABEL          | VALUE
+        ------------------------------
+        MEMBERSHIP NO. | YPADN-000006
+        FULL NAME      | Muttaka Salisu
+        GENDER         | Male
+        AGE            | 30
+        PHONE NUMBER   | 080...
+        LGA            | Kumbotao
+        WARD           | Gurin Gawa
+        UNIT           | 20
+        JOINED         | 22 August 2026
+
+    All values use one vertical column.
+
+    The values are intentionally smaller so they
+    stay inside their dotted guide lines.
     """
 
     # ========================================================
     # VALUE COLUMN
     # ========================================================
     #
-    # The new artwork places the vertical separator
-    # around this position.
+    # This starts AFTER the vertical divider.
     #
-    # This keeps:
+    # Previous value_x = 405
     #
-    # Membership No.
-    # Full Name
-    # Gender
-    # Age
-    # Phone
-    # LGA
-    # Ward
-    # Unit
-    # Joined
+    # New calibrated value_x = 365
     #
-    # perfectly aligned vertically.
+    # This prevents values from appearing too far
+    # inside the empty dotted area.
     # ========================================================
 
-    value_x = 405
+    value_x = 365
 
 
     # ========================================================
     # MEMBERSHIP NUMBER
-    # ========================================================
-    #
-    # Deliberately moved slightly DOWN so that
-    # YPADN-000006 sits directly on the first
-    # dotted line.
     # ========================================================
 
     draw_fitted_text(
@@ -567,10 +613,10 @@ def draw_member_information(
             "",
         ),
         value_x,
-        270,
-        185,
+        288,
+        165,
         font="Helvetica-Bold",
-        font_size=9,
+        font_size=8,
         min_font_size=6,
         color=NAVY,
     )
@@ -588,10 +634,10 @@ def draw_member_information(
             "",
         ),
         value_x,
-        244,
-        250,
+        262,
+        230,
         font="Helvetica-Bold",
-        font_size=9.5,
+        font_size=8,
         min_font_size=6,
         color=NAVY,
     )
@@ -609,10 +655,10 @@ def draw_member_information(
             "",
         ),
         value_x,
-        217,
-        105,
+        236,
+        90,
         font="Helvetica-Bold",
-        font_size=9,
+        font_size=8,
         min_font_size=6,
         color=NAVY,
     )
@@ -630,10 +676,10 @@ def draw_member_information(
             "",
         ),
         value_x,
-        190,
-        70,
+        211,
+        60,
         font="Helvetica-Bold",
-        font_size=9,
+        font_size=8,
         min_font_size=6,
         color=NAVY,
     )
@@ -651,10 +697,10 @@ def draw_member_information(
             "",
         ),
         value_x,
-        164,
-        235,
+        186,
+        210,
         font="Helvetica-Bold",
-        font_size=8.5,
+        font_size=8,
         min_font_size=6,
         color=NAVY,
     )
@@ -672,10 +718,10 @@ def draw_member_information(
             "",
         ),
         value_x,
-        137,
-        170,
+        162,
+        155,
         font="Helvetica-Bold",
-        font_size=9,
+        font_size=8,
         min_font_size=6,
         color=NAVY,
     )
@@ -693,10 +739,10 @@ def draw_member_information(
             "",
         ),
         value_x,
-        111,
-        170,
+        138,
+        155,
         font="Helvetica-Bold",
-        font_size=9,
+        font_size=8,
         min_font_size=6,
         color=NAVY,
     )
@@ -714,10 +760,10 @@ def draw_member_information(
             "",
         ),
         value_x,
-        84,
-        145,
+        114,
+        125,
         font="Helvetica-Bold",
-        font_size=9,
+        font_size=8,
         min_font_size=6,
         color=NAVY,
     )
@@ -733,10 +779,10 @@ def draw_member_information(
             member
         ),
         value_x,
-        58,
-        165,
+        90,
+        150,
         font="Helvetica-Bold",
-        font_size=8,
+        font_size=7.5,
         min_font_size=6,
         color=NAVY,
     )
@@ -753,23 +799,41 @@ def draw_front(
     front_background,
 ):
     """
-    Generate the front side.
+    Generate the front membership card.
     """
+
+    # --------------------------------------------------------
+    # Background
+    # --------------------------------------------------------
 
     draw_background(
         c,
         front_background,
     )
 
+    # --------------------------------------------------------
+    # Member photo
+    # --------------------------------------------------------
+
     draw_member_photo(
         c,
         member,
     )
 
+    # --------------------------------------------------------
+    # Member information
+    # --------------------------------------------------------
+
     draw_member_information(
         c,
         member,
     )
+
+    # --------------------------------------------------------
+    # QR
+    #
+    # Only drawn if qr_path exists.
+    # --------------------------------------------------------
 
     draw_member_qr(
         c,
@@ -786,8 +850,12 @@ def draw_back(
     back_background,
 ):
     """
-    Generate the back side.
+    Generate the back membership card.
     """
+
+    # --------------------------------------------------------
+    # Background
+    # --------------------------------------------------------
 
     draw_background(
         c,
@@ -802,6 +870,10 @@ def draw_back(
         NAVY
     )
 
+    # --------------------------------------------------------
+    # Chairman name
+    # --------------------------------------------------------
+
     c.setFont(
         "Helvetica-Bold",
         8,
@@ -812,6 +884,10 @@ def draw_back(
         74,
         CHAIRMAN_NAME,
     )
+
+    # --------------------------------------------------------
+    # Chairman title
+    # --------------------------------------------------------
 
     c.setFont(
         "Helvetica",
@@ -831,16 +907,26 @@ def draw_back(
 
 def generate_membership_card(
     member,
-    qr_path,
+    qr_path=None,
 ):
     """
     Generate a two-page YPADN membership card.
 
-    Page 1:
-        Front
+    PAGE 1:
+        Front membership card
 
-    Page 2:
-        Back
+    PAGE 2:
+        Back membership card
+
+    Parameters:
+        member:
+            SQLAlchemy Member object.
+
+        qr_path:
+            Optional QR image path.
+
+            If None:
+                No QR is drawn.
 
     Returns:
         Absolute PDF filesystem path.
@@ -857,6 +943,7 @@ def generate_membership_card(
     )
 
     if not registration_no:
+
         raise ValueError(
             "Member registration number is required."
         )
@@ -883,8 +970,11 @@ def generate_membership_card(
 
     if (
         not front_background
-        or not os.path.isfile(front_background)
+        or not os.path.isfile(
+            front_background
+        )
     ):
+
         raise FileNotFoundError(
             "Front membership background not found: "
             f"{front_background}"
@@ -897,8 +987,11 @@ def generate_membership_card(
 
     if (
         not back_background
-        or not os.path.isfile(back_background)
+        or not os.path.isfile(
+            back_background
+        )
     ):
+
         raise FileNotFoundError(
             "Back membership background not found: "
             f"{back_background}"
@@ -916,7 +1009,7 @@ def generate_membership_card(
 
 
     # ========================================================
-    # MAKE SURE CARD DIRECTORY EXISTS
+    # MAKE SURE DIRECTORY EXISTS
     # ========================================================
 
     os.makedirs(
@@ -948,6 +1041,18 @@ def generate_membership_card(
     print(
         f"   Back: {back_background}"
     )
+
+    if qr_path:
+
+        print(
+            f"   QR: {qr_path}"
+        )
+
+    else:
+
+        print(
+            "   QR: disabled"
+        )
 
 
     # ========================================================
@@ -1003,6 +1108,7 @@ def generate_membership_card(
     if not os.path.isfile(
         pdf_path
     ):
+
         raise FileNotFoundError(
             "Membership card was not generated: "
             f"{pdf_path}"
@@ -1018,6 +1124,7 @@ def generate_membership_card(
     )
 
     if file_size <= 0:
+
         raise RuntimeError(
             "Membership card PDF was generated "
             "but is empty."
