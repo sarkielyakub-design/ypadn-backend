@@ -2,59 +2,72 @@ import os
 from pathlib import Path
 
 from fastapi import FastAPI
-from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from app.db.session import Base, engine
 
 
 # ============================================================
-# PATHS
+# PROJECT PATHS
 # ============================================================
 
-# Project root
-#
-# If this file is:
+# main.py:
 #
 # project/
 # ├── app/
 # │   └── main.py
-# └── uploads/
+# ├── uploads/
+# │   ├── passports/
+# │   ├── cards/
+# │   └── qr/
 #
-# then parent.parent points to project/
+# Therefore:
+#
+# Path(__file__).resolve().parent.parent
+#
+# points to the project root.
 #
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 UPLOADS_DIR = BASE_DIR / "uploads"
-
 PASSPORTS_DIR = UPLOADS_DIR / "passports"
 CARDS_DIR = UPLOADS_DIR / "cards"
 QR_DIR = UPLOADS_DIR / "qr"
 
 
 # ============================================================
-# CREATE UPLOAD DIRECTORIES
+# CREATE DIRECTORIES
 # ============================================================
 
-UPLOADS_DIR.mkdir(
-    parents=True,
-    exist_ok=True,
-)
+for directory in (
+    UPLOADS_DIR,
+    PASSPORTS_DIR,
+    CARDS_DIR,
+    QR_DIR,
+):
+    directory.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
 
-PASSPORTS_DIR.mkdir(
-    parents=True,
-    exist_ok=True,
-)
 
-CARDS_DIR.mkdir(
-    parents=True,
-    exist_ok=True,
-)
+# ============================================================
+# PUBLIC BACKEND URL
+# ============================================================
 
-QR_DIR.mkdir(
-    parents=True,
-    exist_ok=True,
-)
+# Railway:
+#
+# BACKEND_URL=https://ypadn-backend-production.up.railway.app
+#
+# Local:
+#
+# BACKEND_URL=http://localhost:8000
+#
+BACKEND_URL = os.getenv(
+    "BACKEND_URL",
+    "http://localhost:8000",
+).strip().rstrip("/")
 
 
 # ============================================================
@@ -62,7 +75,7 @@ QR_DIR.mkdir(
 # ============================================================
 
 # IMPORTANT:
-# Import models BEFORE create_all()
+# Import models before create_all()
 
 from app.models.user import User
 from app.models.member import Member
@@ -112,16 +125,32 @@ app = FastAPI(
 
 
 # ============================================================
+# STORE APPLICATION CONFIG
+# ============================================================
+
+app.state.base_dir = BASE_DIR
+app.state.uploads_dir = UPLOADS_DIR
+app.state.passports_dir = PASSPORTS_DIR
+app.state.cards_dir = CARDS_DIR
+app.state.qr_dir = QR_DIR
+app.state.backend_url = BACKEND_URL
+
+
+# ============================================================
 # CORS
 # ============================================================
 
 frontend_origins = os.getenv(
     "FRONTEND_ORIGINS",
-    "http://localhost:5173,http://localhost:3000",
+    (
+        "http://localhost:5173,"
+        "http://localhost:3000,"
+        "https://ypadn.vercel.app"
+    ),
 ).split(",")
 
 frontend_origins = [
-    origin.strip()
+    origin.strip().rstrip("/")
     for origin in frontend_origins
     if origin.strip()
 ]
@@ -129,31 +158,26 @@ frontend_origins = [
 
 app.add_middleware(
     CORSMiddleware,
-
     allow_origins=frontend_origins,
 
-    # Allow Vercel deployments
-    allow_origin_regex=(
-        r"https://.*\.vercel\.app"
-    ),
+    # Vercel preview deployments
+    allow_origin_regex=r"https://.*\.vercel\.app",
 
     allow_credentials=True,
-
     allow_methods=["*"],
-
     allow_headers=["*"],
 )
 
 
 # ============================================================
-# STATIC FILES
+# STATIC UPLOAD FILES
 # ============================================================
 
 # ============================================================
-# PUBLIC UPLOAD URLS
+# IMPORTANT
 # ============================================================
 #
-# Filesystem:
+# Physical filesystem:
 #
 # /app/uploads/passports/YPADN-000007.jpg
 #
@@ -161,10 +185,14 @@ app.add_middleware(
 #
 # /uploads/passports/YPADN-000007.jpg
 #
-# Therefore:
+# Full Railway URL:
 #
-# https://your-backend.railway.app/
+# https://ypadn-backend-production.up.railway.app/
 # uploads/passports/YPADN-000007.jpg
+#
+# NEVER expose:
+#
+# /app/uploads/...
 #
 # ============================================================
 
@@ -208,6 +236,7 @@ def root():
             "Development Network API Running"
         ),
         "version": "1.0.0",
+        "backend_url": BACKEND_URL,
     }
 
 
@@ -231,6 +260,12 @@ def health_check():
 def uploads_health():
     return {
         "success": True,
+
+        "backend_url": BACKEND_URL,
+
+        "base_directory": str(
+            BASE_DIR
+        ),
 
         "uploads_directory": str(
             UPLOADS_DIR
@@ -273,44 +308,87 @@ def uploads_health():
 @app.get("/uploads-debug")
 def uploads_debug():
     """
-    Debug endpoint to verify files actually exist
-    inside the Railway container.
+    Debug endpoint.
 
-    This should NOT be used by the frontend.
+    Shows files physically present inside
+    the Railway container.
+
+    Do NOT use this endpoint from the frontend.
     """
 
     passports = []
+    cards = []
+    qr_codes = []
+
+    # --------------------------------------------------------
+    # PASSPORTS
+    # --------------------------------------------------------
 
     if PASSPORTS_DIR.exists():
 
-        passports = [
-            file.name
-            for file in PASSPORTS_DIR.iterdir()
-            if file.is_file()
-        ]
+        passports = sorted(
+            [
+                file.name
+                for file in PASSPORTS_DIR.iterdir()
+                if file.is_file()
+            ]
+        )
 
-    cards = []
+    # --------------------------------------------------------
+    # CARDS
+    # --------------------------------------------------------
 
     if CARDS_DIR.exists():
 
-        cards = [
-            file.name
-            for file in CARDS_DIR.iterdir()
-            if file.is_file()
-        ]
+        cards = sorted(
+            [
+                file.name
+                for file in CARDS_DIR.iterdir()
+                if file.is_file()
+            ]
+        )
 
-    qr_codes = []
+    # --------------------------------------------------------
+    # QR CODES
+    # --------------------------------------------------------
 
     if QR_DIR.exists():
 
-        qr_codes = [
-            file.name
-            for file in QR_DIR.iterdir()
-            if file.is_file()
-        ]
+        qr_codes = sorted(
+            [
+                file.name
+                for file in QR_DIR.iterdir()
+                if file.is_file()
+            ]
+        )
+
+    # --------------------------------------------------------
+    # PUBLIC URLS
+    # --------------------------------------------------------
+
+    passport_urls = [
+        f"{BACKEND_URL}/uploads/passports/{filename}"
+        for filename in passports
+    ]
+
+    card_urls = [
+        f"{BACKEND_URL}/uploads/cards/{filename}"
+        for filename in cards
+    ]
+
+    qr_urls = [
+        f"{BACKEND_URL}/uploads/qr/{filename}"
+        for filename in qr_codes
+    ]
+
+    # --------------------------------------------------------
+    # RESPONSE
+    # --------------------------------------------------------
 
     return {
         "success": True,
+
+        "backend_url": BACKEND_URL,
 
         "base_directory": str(
             BASE_DIR
@@ -326,9 +404,46 @@ def uploads_debug():
 
         "qr_codes": qr_codes,
 
+        "public_urls": {
+            "passports": passport_urls,
+            "cards": card_urls,
+            "qr_codes": qr_urls,
+        },
+
         "counts": {
             "passports": len(passports),
             "cards": len(cards),
             "qr_codes": len(qr_codes),
+        },
+    }
+
+
+# ============================================================
+# FILE TEST ENDPOINT
+# ============================================================
+
+@app.get("/uploads-test")
+def uploads_test():
+    """
+    Quick test confirming that the upload directories
+    are available to FastAPI.
+    """
+
+    return {
+        "success": True,
+
+        "message": "Upload system is available.",
+
+        "directories": {
+            "uploads": str(UPLOADS_DIR),
+            "passports": str(PASSPORTS_DIR),
+            "cards": str(CARDS_DIR),
+            "qr": str(QR_DIR),
+        },
+
+        "public_paths": {
+            "passports": "/uploads/passports/",
+            "cards": "/uploads/cards/",
+            "qr": "/uploads/qr/",
         },
     }
