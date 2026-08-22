@@ -49,8 +49,10 @@ import qrcode
 
 
 register_heif_opener()
-
-router = APIRouter()
+router = APIRouter(
+    prefix="/api/members",
+    tags=["Members"],
+)
 
 
 @router.post("/register")
