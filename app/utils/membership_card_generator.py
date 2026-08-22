@@ -18,16 +18,6 @@ from reportlab.pdfbase.pdfmetrics import stringWidth
 # PROJECT PATHS
 # ============================================================
 
-# This file is:
-#
-# app/utils/membership_card_generator.py
-#
-# Therefore:
-#
-# ../../
-#
-# points to the project root.
-#
 BASE_DIR = os.path.abspath(
     os.path.join(
         os.path.dirname(__file__),
@@ -53,16 +43,8 @@ ASSET_DIR = os.path.join(
     "membership",
 )
 
-
-os.makedirs(
-    CARD_DIR,
-    exist_ok=True,
-)
-
-os.makedirs(
-    ASSET_DIR,
-    exist_ok=True,
-)
+os.makedirs(CARD_DIR, exist_ok=True)
+os.makedirs(ASSET_DIR, exist_ok=True)
 
 
 # ============================================================
@@ -89,27 +71,24 @@ CHAIRMAN_TITLE = "CHAIRMAN, YPADN"
 # ============================================================
 
 NAVY = HexColor("#0B2347")
-
 GREEN = HexColor("#087A3D")
-
 DARK_GREEN = HexColor("#075B30")
-
 WHITE = colors.white
 
 
 # ============================================================
 # CARD SIZE
 #
-# Original artwork:
+# Artwork ratio:
 # 1536 x 1024
 #
-# Ratio:
-# 3 : 2
+# PDF:
+# 750 x 500
 #
+# Same 3:2 ratio.
 # ============================================================
 
 WIDTH = 750
-
 HEIGHT = 500
 
 
@@ -145,7 +124,6 @@ FRONT_FALLBACKS = [
     ),
 ]
 
-
 BACK_FALLBACKS = [
     os.path.join(
         BASE_DIR,
@@ -162,16 +140,6 @@ BACK_FALLBACKS = [
 def resolve_file_path(path):
     """
     Convert a relative project path into an absolute path.
-
-    Examples:
-
-        uploads/photo.jpg
-        assets/qr/qr.png
-
-    become:
-
-        /app/uploads/photo.jpg
-        /app/assets/qr/qr.png
     """
 
     if not path:
@@ -202,15 +170,14 @@ def resolve_asset(
     fallbacks=None,
 ):
     """
-    Find an asset using the primary path first,
-    then fallback paths.
+    Resolve the primary asset first.
+    If unavailable, use a fallback.
     """
 
     if primary and os.path.isfile(primary):
         return primary
 
     for path in fallbacks or []:
-
         if path and os.path.isfile(path):
             return path
 
@@ -226,7 +193,7 @@ def draw_background(
     image_path,
 ):
     """
-    Draw membership-card background.
+    Draw the card background.
     """
 
     image_path = resolve_file_path(
@@ -268,8 +235,7 @@ def draw_fitted_text(
     color=NAVY,
 ):
     """
-    Draw text while automatically reducing font size
-    when the text is too long.
+    Draw text with automatic font-size reduction.
     """
 
     text = str(
@@ -319,7 +285,10 @@ def draw_member_photo(
     member,
 ):
     """
-    Draw member passport photograph.
+    Draw the member passport photograph.
+
+    Coordinates are calibrated for the NEW
+    card_front_background.png.
     """
 
     passport = getattr(
@@ -345,21 +314,22 @@ def draw_member_photo(
         )
         return
 
-    # --------------------------------------------------------
-    # PHOTO POSITION
-    # --------------------------------------------------------
+    # ========================================================
+    # NEW FRONT CARD PHOTO POSITION
+    # ========================================================
 
-    x = 35
+    x = 40
+    y = 58
 
-    y = 55
-
-    photo_width = 165
-
-    photo_height = 170
+    photo_width = 180
+    photo_height = 205
 
     try:
 
-        # White frame
+        # ----------------------------------------------------
+        # White backing
+        # ----------------------------------------------------
+
         c.setFillColor(
             WHITE
         )
@@ -374,7 +344,10 @@ def draw_member_photo(
             stroke=0,
         )
 
+        # ----------------------------------------------------
         # Green border
+        # ----------------------------------------------------
+
         c.setStrokeColor(
             GREEN
         )
@@ -393,7 +366,10 @@ def draw_member_photo(
             stroke=1,
         )
 
+        # ----------------------------------------------------
         # Passport image
+        # ----------------------------------------------------
+
         c.drawImage(
             ImageReader(passport),
             x + 2,
@@ -422,7 +398,8 @@ def draw_member_qr(
     qr_path,
 ):
     """
-    Draw generated QR code over the QR placeholder.
+    Draw the real member QR code over the
+    QR placeholder in the new artwork.
     """
 
     qr_path = resolve_file_path(
@@ -442,32 +419,38 @@ def draw_member_qr(
         )
         return
 
-    # --------------------------------------------------------
-    # QR POSITION
-    # --------------------------------------------------------
+    # ========================================================
+    # NEW FRONT CARD QR POSITION
+    # ========================================================
 
-    x = 527
+    x = 610
+    y = 205
 
-    y = 165
-
-    size = 96
+    size = 92
 
     try:
 
+        # ----------------------------------------------------
         # White backing
+        # ----------------------------------------------------
+
         c.setFillColor(
             WHITE
         )
 
         c.roundRect(
-            x - 6,
-            y - 6,
-            size + 12,
-            size + 12,
-            8,
+            x - 5,
+            y - 5,
+            size + 10,
+            size + 10,
+            7,
             fill=1,
             stroke=0,
         )
+
+        # ----------------------------------------------------
+        # QR
+        # ----------------------------------------------------
 
         c.drawImage(
             ImageReader(qr_path),
@@ -510,6 +493,15 @@ def get_joined_date(
                 "%d %B %Y"
             )
 
+        # Handle date-like SQLAlchemy values
+        if hasattr(
+            created_at,
+            "strftime",
+        ):
+            return created_at.strftime(
+                "%d %B %Y"
+            )
+
     return datetime.now().strftime(
         "%d %B %Y"
     )
@@ -524,21 +516,48 @@ def draw_member_information(
     member,
 ):
     """
-    Draw dynamic member values.
+    Draw ONLY dynamic member values.
 
-    The labels are already contained in
-    card_front_background.png.
+    The labels are already part of the
+    card_front_background.png artwork.
+
+    IMPORTANT:
+    All values use the same value column.
     """
 
-    # --------------------------------------------------------
-    # VALUE X POSITION
-    # --------------------------------------------------------
+    # ========================================================
+    # VALUE COLUMN
+    # ========================================================
+    #
+    # The new artwork places the vertical separator
+    # around this position.
+    #
+    # This keeps:
+    #
+    # Membership No.
+    # Full Name
+    # Gender
+    # Age
+    # Phone
+    # LGA
+    # Ward
+    # Unit
+    # Joined
+    #
+    # perfectly aligned vertically.
+    # ========================================================
 
-    value_x = 350
+    value_x = 405
 
-    # --------------------------------------------------------
+
+    # ========================================================
     # MEMBERSHIP NUMBER
-    # --------------------------------------------------------
+    # ========================================================
+    #
+    # Deliberately moved slightly DOWN so that
+    # YPADN-000006 sits directly on the first
+    # dotted line.
+    # ========================================================
 
     draw_fitted_text(
         c,
@@ -548,17 +567,18 @@ def draw_member_information(
             "",
         ),
         value_x,
-        282,
-        175,
+        270,
+        185,
         font="Helvetica-Bold",
         font_size=9,
         min_font_size=6,
         color=NAVY,
     )
 
-    # --------------------------------------------------------
+
+    # ========================================================
     # FULL NAME
-    # --------------------------------------------------------
+    # ========================================================
 
     draw_fitted_text(
         c,
@@ -568,17 +588,18 @@ def draw_member_information(
             "",
         ),
         value_x,
-        256,
-        245,
+        244,
+        250,
         font="Helvetica-Bold",
-        font_size=10,
+        font_size=9.5,
         min_font_size=6,
         color=NAVY,
     )
 
-    # --------------------------------------------------------
+
+    # ========================================================
     # GENDER
-    # --------------------------------------------------------
+    # ========================================================
 
     draw_fitted_text(
         c,
@@ -588,17 +609,18 @@ def draw_member_information(
             "",
         ),
         value_x,
-        231,
-        100,
+        217,
+        105,
         font="Helvetica-Bold",
         font_size=9,
         min_font_size=6,
         color=NAVY,
     )
 
-    # --------------------------------------------------------
+
+    # ========================================================
     # AGE
-    # --------------------------------------------------------
+    # ========================================================
 
     draw_fitted_text(
         c,
@@ -608,17 +630,18 @@ def draw_member_information(
             "",
         ),
         value_x,
-        206,
-        80,
+        190,
+        70,
         font="Helvetica-Bold",
         font_size=9,
         min_font_size=6,
         color=NAVY,
     )
 
-    # --------------------------------------------------------
-    # PHONE
-    # --------------------------------------------------------
+
+    # ========================================================
+    # PHONE NUMBER
+    # ========================================================
 
     draw_fitted_text(
         c,
@@ -628,17 +651,18 @@ def draw_member_information(
             "",
         ),
         value_x,
-        181,
-        230,
+        164,
+        235,
         font="Helvetica-Bold",
-        font_size=9,
+        font_size=8.5,
         min_font_size=6,
         color=NAVY,
     )
 
-    # --------------------------------------------------------
+
+    # ========================================================
     # LGA
-    # --------------------------------------------------------
+    # ========================================================
 
     draw_fitted_text(
         c,
@@ -648,17 +672,18 @@ def draw_member_information(
             "",
         ),
         value_x,
-        157,
-        165,
+        137,
+        170,
         font="Helvetica-Bold",
         font_size=9,
         min_font_size=6,
         color=NAVY,
     )
 
-    # --------------------------------------------------------
+
+    # ========================================================
     # WARD
-    # --------------------------------------------------------
+    # ========================================================
 
     draw_fitted_text(
         c,
@@ -668,17 +693,18 @@ def draw_member_information(
             "",
         ),
         value_x,
-        133,
-        165,
+        111,
+        170,
         font="Helvetica-Bold",
         font_size=9,
         min_font_size=6,
         color=NAVY,
     )
 
-    # --------------------------------------------------------
+
+    # ========================================================
     # UNIT
-    # --------------------------------------------------------
+    # ========================================================
 
     draw_fitted_text(
         c,
@@ -688,17 +714,18 @@ def draw_member_information(
             "",
         ),
         value_x,
-        109,
-        140,
+        84,
+        145,
         font="Helvetica-Bold",
         font_size=9,
         min_font_size=6,
         color=NAVY,
     )
 
-    # --------------------------------------------------------
+
+    # ========================================================
     # JOINED
-    # --------------------------------------------------------
+    # ========================================================
 
     draw_fitted_text(
         c,
@@ -706,8 +733,8 @@ def draw_member_information(
             member
         ),
         value_x,
-        85,
-        155,
+        58,
+        165,
         font="Helvetica-Bold",
         font_size=8,
         min_font_size=6,
@@ -723,11 +750,15 @@ def draw_front(
     c,
     member,
     qr_path,
+    front_background,
 ):
+    """
+    Generate the front side.
+    """
 
     draw_background(
         c,
-        FRONT_BACKGROUND,
+        front_background,
     )
 
     draw_member_photo(
@@ -752,16 +783,20 @@ def draw_front(
 
 def draw_back(
     c,
+    back_background,
 ):
+    """
+    Generate the back side.
+    """
 
     draw_background(
         c,
-        BACK_BACKGROUND,
+        back_background,
     )
 
-    # --------------------------------------------------------
+    # ========================================================
     # AUTHORIZED SIGNATORY
-    # --------------------------------------------------------
+    # ========================================================
 
     c.setFillColor(
         NAVY
@@ -811,6 +846,10 @@ def generate_membership_card(
         Absolute PDF filesystem path.
     """
 
+    # ========================================================
+    # REGISTRATION NUMBER
+    # ========================================================
+
     registration_no = getattr(
         member,
         "registration_no",
@@ -822,9 +861,10 @@ def generate_membership_card(
             "Member registration number is required."
         )
 
-    # --------------------------------------------------------
-    # Resolve backgrounds
-    # --------------------------------------------------------
+
+    # ========================================================
+    # RESOLVE BACKGROUNDS
+    # ========================================================
 
     front_background = resolve_asset(
         FRONT_BACKGROUND,
@@ -836,45 +876,58 @@ def generate_membership_card(
         BACK_FALLBACKS,
     )
 
-    # --------------------------------------------------------
-    # Verify backgrounds
-    # --------------------------------------------------------
 
-    if not front_background or not os.path.isfile(
-        front_background
+    # ========================================================
+    # VERIFY FRONT BACKGROUND
+    # ========================================================
+
+    if (
+        not front_background
+        or not os.path.isfile(front_background)
     ):
-
         raise FileNotFoundError(
             "Front membership background not found: "
             f"{front_background}"
         )
 
-    if not back_background or not os.path.isfile(
-        back_background
-    ):
 
+    # ========================================================
+    # VERIFY BACK BACKGROUND
+    # ========================================================
+
+    if (
+        not back_background
+        or not os.path.isfile(back_background)
+    ):
         raise FileNotFoundError(
             "Back membership background not found: "
             f"{back_background}"
         )
 
-    # --------------------------------------------------------
+
+    # ========================================================
     # PDF PATH
-    # --------------------------------------------------------
+    # ========================================================
 
     pdf_path = os.path.join(
         CARD_DIR,
         f"{registration_no}-membership-card.pdf",
     )
 
-    # --------------------------------------------------------
-    # Make sure directory exists
-    # --------------------------------------------------------
+
+    # ========================================================
+    # MAKE SURE CARD DIRECTORY EXISTS
+    # ========================================================
 
     os.makedirs(
         CARD_DIR,
         exist_ok=True,
     )
+
+
+    # ========================================================
+    # LOGGING
+    # ========================================================
 
     print(
         "📄 Generating membership card..."
@@ -896,9 +949,10 @@ def generate_membership_card(
         f"   Back: {back_background}"
     )
 
-    # --------------------------------------------------------
+
+    # ========================================================
     # CREATE PDF
-    # --------------------------------------------------------
+    # ========================================================
 
     c = canvas.Canvas(
         pdf_path,
@@ -908,99 +962,71 @@ def generate_membership_card(
         ),
     )
 
+
     # ========================================================
     # PAGE 1 — FRONT
     # ========================================================
 
-    draw_background(
+    draw_front(
         c,
+        member,
+        qr_path,
         front_background,
     )
 
-    draw_member_photo(
-        c,
-        member,
-    )
-
-    draw_member_information(
-        c,
-        member,
-    )
-
-    draw_member_qr(
-        c,
-        qr_path,
-    )
-
     c.showPage()
+
 
     # ========================================================
     # PAGE 2 — BACK
     # ========================================================
 
-    draw_background(
+    draw_back(
         c,
         back_background,
     )
 
-    # Signatory
-    c.setFillColor(
-        NAVY
-    )
-
-    c.setFont(
-        "Helvetica-Bold",
-        8,
-    )
-
-    c.drawCentredString(
-        575,
-        74,
-        CHAIRMAN_NAME,
-    )
-
-    c.setFont(
-        "Helvetica",
-        7,
-    )
-
-    c.drawCentredString(
-        575,
-        63,
-        CHAIRMAN_TITLE,
-    )
-
     c.showPage()
 
-    # --------------------------------------------------------
-    # SAVE
-    # --------------------------------------------------------
+
+    # ========================================================
+    # SAVE PDF
+    # ========================================================
 
     c.save()
 
-    # --------------------------------------------------------
-    # VERIFY PDF
-    # --------------------------------------------------------
+
+    # ========================================================
+    # VERIFY PDF EXISTS
+    # ========================================================
 
     if not os.path.isfile(
         pdf_path
     ):
-
         raise FileNotFoundError(
             "Membership card was not generated: "
             f"{pdf_path}"
         )
+
+
+    # ========================================================
+    # VERIFY PDF SIZE
+    # ========================================================
 
     file_size = os.path.getsize(
         pdf_path
     )
 
     if file_size <= 0:
-
         raise RuntimeError(
             "Membership card PDF was generated "
             "but is empty."
         )
+
+
+    # ========================================================
+    # SUCCESS
+    # ========================================================
 
     print(
         "✅ Membership card generated successfully."
