@@ -1,59 +1,159 @@
+import os
+import traceback
+from io import BytesIO
+from pathlib import Path
+
+import qrcode
 from fastapi import (
     APIRouter,
     Depends,
-    Form,
     File,
+    Form,
+    HTTPException,
     UploadFile,
-    HTTPException
 )
 from fastapi.responses import FileResponse
 from openpyxl import Workbook
-from reportlab.platypus import (
-    SimpleDocTemplate,
-    Table,
-    TableStyle
-)
-from reportlab.lib import colors
-from sqlalchemy.orm import Session
-import os
-import uuid
-import qrcode
-from datetime import datetime
-from fastapi.responses import FileResponse
-from app.db.session import get_db
-from app.models.member import Member
-from app.services.registration_service import generate_registration_no
-from app.utils.membership_card_generator import (
-    generate_membership_card
-)
-
-router = APIRouter(
-    prefix="/api/members",
-    tags=["Members"]
-)
-
-import os
-import traceback
-
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
-from sqlalchemy.orm import Session
 from PIL import Image, ImageOps
 from pillow_heif import register_heif_opener
+from reportlab.lib import colors
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle
+from sqlalchemy.orm import Session
 
+from app.config import BACKEND_URL
 from app.db.session import get_db
 from app.models.member import Member
 from app.services.registration_service import generate_registration_no
+from app.utils.membership_card_generator import generate_membership_card
 
 
-import qrcode
-
+# ============================================================
+# HEIC / HEIF SUPPORT
+# ============================================================
 
 register_heif_opener()
+
+
+# ============================================================
+# ROUTER
+# ============================================================
+
 router = APIRouter(
     prefix="/api/members",
     tags=["Members"],
 )
 
+
+# ============================================================
+# PATHS
+# ============================================================
+
+BASE_DIR = Path(__file__).resolve().parents[3]
+
+UPLOADS_DIR = BASE_DIR / "uploads"
+PASSPORTS_DIR = UPLOADS_DIR / "passports"
+QR_DIR = UPLOADS_DIR / "qr"
+CARDS_DIR = UPLOADS_DIR / "cards"
+
+
+for directory in (
+    UPLOADS_DIR,
+    PASSPORTS_DIR,
+    QR_DIR,
+    CARDS_DIR,
+):
+    directory.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+
+# ============================================================
+# PUBLIC URL HELPER
+# ============================================================
+
+def public_upload_url(path):
+    """
+    Convert an internal filesystem path into a public
+    browser-accessible URL.
+
+    Example:
+
+    uploads/cards/YPADN-000068-membership-card.pdf
+
+    becomes:
+
+    https://ypadn-backend-production.up.railway.app/
+    uploads/cards/YPADN-000068-membership-card.pdf
+    """
+
+    if not path:
+        return None
+
+    path = str(path).replace("\\", "/")
+
+    # Handle absolute paths such as:
+    # /app/uploads/cards/file.pdf
+    if "/uploads/" in path:
+        path = path.split("/uploads/", 1)[1]
+
+    # Handle:
+    # uploads/cards/file.pdf
+    if path.startswith("uploads/"):
+        path = path[len("uploads/"):]
+
+    return f"{BACKEND_URL}/uploads/{path.lstrip('/')}"
+
+
+# ============================================================
+# INTERNAL PATH HELPER
+# ============================================================
+
+def absolute_upload_path(path):
+    """
+    Convert stored database path into an absolute filesystem path.
+    """
+
+    if not path:
+        return None
+
+    path = str(path).replace("\\", "/")
+
+    if os.path.isabs(path):
+        return Path(path)
+
+    if path.startswith("uploads/"):
+        return BASE_DIR / path
+
+    return UPLOADS_DIR / path
+
+
+# ============================================================
+# RELATIVE DATABASE PATH
+# ============================================================
+
+def relative_upload_path(path):
+    """
+    Always store uploads using:
+
+    uploads/...
+
+    instead of:
+
+    /app/uploads/...
+    """
+
+    path = Path(path)
+
+    try:
+        return path.relative_to(BASE_DIR).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
+# ============================================================
+# REGISTER MEMBER
+# ============================================================
 
 @router.post("/register")
 async def register(
@@ -83,61 +183,44 @@ async def register(
     member = None
 
     try:
-        # ---------------------------------------------------------
-        # CREATE UPLOAD DIRECTORIES
-        # ---------------------------------------------------------
-        os.makedirs("uploads/passports", exist_ok=True)
-        os.makedirs("uploads/qr", exist_ok=True)
-        os.makedirs("uploads/cards", exist_ok=True)
 
-        # ---------------------------------------------------------
-        # GENERATE REGISTRATION NUMBER
-        # ---------------------------------------------------------
+        # ========================================================
+        # REGISTRATION NUMBER
+        # ========================================================
+
         registration_no = generate_registration_no(db)
 
-        # ---------------------------------------------------------
-        # READ UPLOADED PASSPORT
-        # ---------------------------------------------------------
+
+        # ========================================================
+        # PASSPORT
+        # ========================================================
+
         passport_data = await passport.read()
 
         if not passport_data:
             raise HTTPException(
                 status_code=400,
-                detail="Passport image is empty."
+                detail="Passport image is empty.",
             )
 
-        # ---------------------------------------------------------
-        # VALIDATE + NORMALIZE IMAGE
-        #
-        # This supports:
-        # - JPG/JPEG
-        # - PNG
-        # - HEIC
-        # - HEIF
-        # - WebP
-        #
-        # We do NOT trust the uploaded filename extension.
-        # Everything is converted to a real JPEG.
-        # ---------------------------------------------------------
         try:
-            from io import BytesIO
 
-            image = Image.open(BytesIO(passport_data))
+            image = Image.open(
+                BytesIO(passport_data)
+            )
 
-            # Fix iPhone/EXIF orientation
             image = ImageOps.exif_transpose(image)
 
-            # Convert to RGB
             if image.mode != "RGB":
                 image = image.convert("RGB")
 
-            passport_path = (
-                f"uploads/passports/{registration_no}.jpg"
+            passport_file = (
+                PASSPORTS_DIR
+                / f"{registration_no}.jpg"
             )
 
-            # Save as a genuine JPEG
             image.save(
-                passport_path,
+                passport_file,
                 format="JPEG",
                 quality=92,
                 optimize=True,
@@ -145,347 +228,786 @@ async def register(
 
             image.close()
 
+            passport_path = relative_upload_path(
+                passport_file
+            )
+
         except Exception as image_error:
+
             raise HTTPException(
                 status_code=400,
                 detail=(
                     "Invalid passport image. "
-                    "Please upload a valid JPG, PNG, HEIC, HEIF or WebP image."
+                    "Please upload a valid JPG, PNG, "
+                    "HEIC, HEIF or WebP image."
                 ),
             ) from image_error
 
-        # ---------------------------------------------------------
-        # GENERATE QR CODE
-        # ---------------------------------------------------------
-        qr_path = f"uploads/qr/{registration_no}.png"
 
-        qr = qrcode.make(registration_no)
-        qr.save(qr_path)
+        # ========================================================
+        # QR CODE
+        # ========================================================
 
-        # ---------------------------------------------------------
+        qr_file = (
+            QR_DIR
+            / f"{registration_no}.png"
+        )
+
+        verification_url = (
+            f"{BACKEND_URL}"
+            f"/api/members/verify/{registration_no}"
+        )
+
+        qr = qrcode.make(
+            verification_url
+        )
+
+        qr.save(qr_file)
+
+        qr_path = relative_upload_path(
+            qr_file
+        )
+
+
+        # ========================================================
         # CREATE MEMBER
-        # ---------------------------------------------------------
+        # ========================================================
+
         member = Member(
             registration_no=registration_no,
 
             passport=passport_path,
             qr_code=qr_path,
 
-            name=name,
-            phone=phone,
-            gender=gender,
+            name=name.strip(),
+            phone=phone.strip(),
+            gender=gender.strip(),
             age=age,
 
-            lga=lga,
-            ward=ward,
-            unit=unit,
+            lga=lga.strip(),
+            ward=ward.strip(),
+            unit=unit.strip(),
 
-            highest_qualification=highest_qualification,
-            additional_qualification=additional_qualification,
+            highest_qualification=(
+                highest_qualification.strip()
+            ),
 
-            specialization=specialization,
+            additional_qualification=(
+                additional_qualification.strip()
+                if additional_qualification
+                else None
+            ),
 
-            employment_status=employment_status,
+            specialization=(
+                specialization.strip()
+                if specialization
+                else None
+            ),
 
-            physically_challenged=physically_challenged,
+            employment_status=(
+                employment_status.strip()
+            ),
 
-            youth_org_member=youth_org_member,
+            physically_challenged=(
+                physically_challenged
+            ),
 
-            organization_name=organization_name,
-            position=position,
+            youth_org_member=(
+                youth_org_member
+            ),
 
-            expectation=expectation,
+            organization_name=(
+                organization_name.strip()
+                if organization_name
+                else None
+            ),
+
+            position=(
+                position.strip()
+                if position
+                else None
+            ),
+
+            expectation=(
+                expectation.strip()
+                if expectation
+                else None
+            ),
         )
 
         db.add(member)
+
         db.commit()
+
         db.refresh(member)
 
-        # ---------------------------------------------------------
-        # GENERATE MEMBERSHIP CARD
-        # ---------------------------------------------------------
-        membership_card_path = generate_membership_card(
-            member,
-            qr_path,
+
+        # ========================================================
+        # MEMBERSHIP CARD
+        # ========================================================
+
+        card_file = Path(
+            generate_membership_card(
+                member,
+                str(
+                    absolute_upload_path(
+                        qr_path
+                    )
+                ),
+            )
         )
 
-        # ---------------------------------------------------------
+        membership_card_path = (
+            relative_upload_path(
+                card_file
+            )
+        )
+
+
+        # ========================================================
         # SAVE CARD PATH
-        # ---------------------------------------------------------
+        # ========================================================
+
         member.id_card = membership_card_path
 
         db.commit()
+
         db.refresh(member)
 
-        # ---------------------------------------------------------
-        # SUCCESS RESPONSE
-        # ---------------------------------------------------------
+
+        # ========================================================
+        # SUCCESS
+        # ========================================================
+
         return {
             "success": True,
-            "message": "Registration successful",
-            "registration_no": registration_no,
+
+            "message": (
+                "YPADN membership registration "
+                "successful."
+            ),
+
+            "organization": (
+                "Youth Political Awareness "
+                "& Development Network"
+            ),
+
+            "short_name": "YPADN",
+
+            "registration_no": (
+                registration_no
+            ),
+
             "member_id": member.id,
-            "passport": passport_path,
-            "qr_code": qr_path,
-            "id_card": membership_card_path,
+
+            "passport": public_upload_url(
+                passport_path
+            ),
+
+            "qr_code": public_upload_url(
+                qr_path
+            ),
+
+            "id_card": public_upload_url(
+                membership_card_path
+            ),
+
+            "membership_card": public_upload_url(
+                membership_card_path
+            ),
+
+            "verification_url": (
+                f"{BACKEND_URL}"
+                f"/api/members/verify/"
+                f"{registration_no}"
+            ),
         }
 
+
     except HTTPException:
+
         db.rollback()
 
-        # Clean up generated files if registration fails
-        for path in [
-            passport_path,
-            qr_path,
-            membership_card_path,
-        ]:
-            if path and os.path.exists(path):
-                try:
-                    os.remove(path)
-                except OSError:
-                    pass
+        _cleanup_files(
+            [
+                passport_path,
+                qr_path,
+                membership_card_path,
+            ]
+        )
 
-        # If a member was already inserted, remove it
-        if member is not None and member.id is not None:
+        if member is not None:
+
             try:
+
                 db.delete(member)
                 db.commit()
+
             except Exception:
+
                 db.rollback()
 
         raise
 
-    except Exception as e:
+
+    except Exception as error:
+
         traceback.print_exc()
 
         db.rollback()
 
-        # Clean up generated files
-        for path in [
-            passport_path,
-            qr_path,
-            membership_card_path,
-        ]:
-            if path and os.path.exists(path):
-                try:
-                    os.remove(path)
-                except OSError:
-                    pass
+        _cleanup_files(
+            [
+                passport_path,
+                qr_path,
+                membership_card_path,
+            ]
+        )
 
-        # Remove partially-created member record
-        if member is not None and member.id is not None:
+        if member is not None:
+
             try:
+
                 db.delete(member)
                 db.commit()
+
             except Exception:
+
                 db.rollback()
 
         raise HTTPException(
             status_code=500,
-            detail=f"Registration failed: {str(e)}",
+            detail=(
+                f"Registration failed: {error}"
+            ),
+        ) from error
+
+
+# ============================================================
+# CLEANUP
+# ============================================================
+
+def _cleanup_files(paths):
+
+    for path in paths:
+
+        if not path:
+            continue
+
+        absolute = absolute_upload_path(
+            path
         )
+
+        if not absolute:
+            continue
+
+        try:
+
+            if absolute.is_file():
+                absolute.unlink()
+
+        except OSError:
+
+            pass
+
+
+# ============================================================
+# GET ALL MEMBERS
+# ============================================================
+
 @router.get("/")
-def get_all_members(db: Session = Depends(get_db)):
-    members = db.query(Member).all()
-    
+def get_all_members(
+    db: Session = Depends(get_db),
+):
+
+    members = (
+        db.query(Member)
+        .order_by(Member.id.desc())
+        .all()
+    )
+
     return {
         "count": len(members),
-        "data": members
+        "data": members,
     }
+
+
+# ============================================================
+# STATISTICS
+# ============================================================
 
 @router.get("/stats/summary")
-def statistics(db: Session = Depends(get_db)):
+def statistics(
+    db: Session = Depends(get_db),
+):
+
     return {
-        "total_members": db.query(Member).count(),
-        "male": db.query(Member)
-            .filter(Member.gender.ilike("male"))
+
+        "total_members":
+            db.query(Member).count(),
+
+        "male":
+            db.query(Member)
+            .filter(
+                Member.gender.ilike("male")
+            )
             .count(),
-        "female": db.query(Member)
-            .filter(Member.gender.ilike("female"))
+
+        "female":
+            db.query(Member)
+            .filter(
+                Member.gender.ilike("female")
+            )
             .count(),
-        "employed": db.query(Member)
-            .filter(Member.employment_status.ilike("employed"))
+
+        "employed":
+            db.query(Member)
+            .filter(
+                Member.employment_status.ilike(
+                    "employed"
+                )
+            )
             .count(),
-        "unemployed": db.query(Member)
-            .filter(Member.employment_status.ilike("unemployed"))
+
+        "unemployed":
+            db.query(Member)
+            .filter(
+                Member.employment_status.ilike(
+                    "unemployed"
+                )
+            )
             .count(),
-        "physically_challenged": db.query(Member)
-            .filter(Member.physically_challenged == True)
+
+        "physically_challenged":
+            db.query(Member)
+            .filter(
+                Member.physically_challenged.is_(True)
+            )
             .count(),
-        "youth_org_members": db.query(Member)
-            .filter(Member.youth_org_member == True)
-            .count()
+
+        "youth_org_members":
+            db.query(Member)
+            .filter(
+                Member.youth_org_member.is_(True)
+            )
+            .count(),
     }
+
+
+# ============================================================
+# VERIFY MEMBER
+# ============================================================
+
+@router.get("/verify/{registration_no}")
+def verify_member(
+    registration_no: str,
+    db: Session = Depends(get_db),
+):
+
+    member = (
+        db.query(Member)
+        .filter(
+            Member.registration_no
+            == registration_no
+        )
+        .first()
+    )
+
+    if not member:
+
+        raise HTTPException(
+            status_code=404,
+            detail="YPADN member not found",
+        )
+
+    return {
+
+        "verified": True,
+
+        "organization": (
+            "Youth Political Awareness "
+            "& Development Network"
+        ),
+
+        "short_name": "YPADN",
+
+        "registration_no":
+            member.registration_no,
+
+        "name":
+            member.name,
+
+        "gender":
+            member.gender,
+
+        "age":
+            member.age,
+
+        "lga":
+            member.lga,
+
+        "ward":
+            member.ward,
+
+        "unit":
+            member.unit,
+
+        "passport":
+            public_upload_url(
+                member.passport
+            ),
+
+        "joined":
+            member.created_at,
+    }
+
+
+# ============================================================
+# SEARCH
+# ============================================================
 
 @router.get("/search/{registration_no}")
-def search_member(registration_no: str, db: Session = Depends(get_db)):
+def search_member(
+    registration_no: str,
+    db: Session = Depends(get_db),
+):
+
     member = (
         db.query(Member)
-        .filter(Member.registration_no == registration_no)
+        .filter(
+            Member.registration_no
+            == registration_no
+        )
         .first()
     )
-    
+
     if not member:
+
         raise HTTPException(
             status_code=404,
-            detail="Member not found"
+            detail="Member not found",
         )
+
     return member
+
+
+# ============================================================
+# GET MEMBER
+# ============================================================
 
 @router.get("/{member_id}")
-def get_member(member_id: int, db: Session = Depends(get_db)):
+def get_member(
+    member_id: int,
+    db: Session = Depends(get_db),
+):
+
     member = (
         db.query(Member)
-        .filter(Member.id == member_id)
+        .filter(
+            Member.id == member_id
+        )
         .first()
     )
-    
+
     if not member:
+
         raise HTTPException(
             status_code=404,
-            detail="Member not found"
+            detail="Member not found",
         )
+
     return member
 
+
+# ============================================================
+# DELETE MEMBER
+# ============================================================
+
 @router.delete("/{member_id}")
-def delete_member(member_id: int, db: Session = Depends(get_db)):
+def delete_member(
+    member_id: int,
+    db: Session = Depends(get_db),
+):
+
     member = (
         db.query(Member)
-        .filter(Member.id == member_id)
+        .filter(
+            Member.id == member_id
+        )
         .first()
     )
-    
+
     if not member:
+
         raise HTTPException(
             status_code=404,
-            detail="Member not found"
+            detail="Member not found",
         )
+
+    _cleanup_files(
+        [
+            member.passport,
+            member.qr_code,
+            member.id_card,
+        ]
+    )
+
     db.delete(member)
+
     db.commit()
+
     return {
         "success": True,
-
-        "message": "Member deleted successfully"
+        "message": (
+            "Member deleted successfully"
+        ),
     }
-@router.get("/membership-card/{registration_no}")
+
+
+# ============================================================
+# MEMBERSHIP CARD DOWNLOAD
+# ============================================================
+
+@router.get(
+    "/membership-card/{registration_no}"
+)
 def download_membership_card(
     registration_no: str,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
-    member = db.query(
-        Member
-    ).filter(
-        Member.registration_no ==
-        registration_no
-    ).first()
+
+    member = (
+        db.query(Member)
+        .filter(
+            Member.registration_no
+            == registration_no
+        )
+        .first()
+    )
+
+    if not member:
+
+        raise HTTPException(
+            status_code=404,
+            detail="Member not found",
+        )
+
+
+    # --------------------------------------------------------
+    # Existing card
+    # --------------------------------------------------------
+
+    card_path = absolute_upload_path(
+        member.id_card
+    )
+
+
+    # --------------------------------------------------------
+    # Regenerate if missing
+    # --------------------------------------------------------
+
+    if not card_path or not card_path.is_file():
+
+        qr_path = absolute_upload_path(
+            member.qr_code
+        )
+
+        generated = Path(
+            generate_membership_card(
+                member,
+                str(qr_path)
+                if qr_path
+                else None,
+            )
+        )
+
+        member.id_card = relative_upload_path(
+            generated
+        )
+
+        db.commit()
+
+        card_path = generated
+
 
     return FileResponse(
-        member.id_card,
+        path=str(card_path),
         media_type="application/pdf",
-        filename=f"{registration_no}-membership-card.pdf"
+        filename=(
+            f"{registration_no}"
+            "-membership-card.pdf"
+        ),
     )
+
+
+# ============================================================
+# EXCEL EXPORT
+# ============================================================
+
 @router.get("/export/excel")
 def export_excel(
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
-    members = db.query(
-        Member
-    ).all()
 
-    wb = Workbook()
+    members = (
+        db.query(Member)
+        .order_by(Member.id.asc())
+        .all()
+    )
 
-    ws = wb.active
-    ws.title = "Members"
+    workbook = Workbook()
 
-    ws.append([
-        "Reg No",
-        "Name",
-        "Phone",
-        "Gender",
-        "Age",
-        "LGA",
-        "Ward",
-        "Unit",
-        "Qualification"
-    ])
+    worksheet = workbook.active
 
-    for v in members:
-        ws.append([
-            v.registration_no,
-            v.name,
-            v.phone,
-            v.gender,
-            v.age,
-            v.lga,
-            v.ward,
-            v.unit,
-            v.highest_qualification
-        ])
+    worksheet.title = "YPADN Members"
 
-    path = "uploads/members.xlsx"
 
-    wb.save(path)
+    worksheet.append(
+        [
+            "Registration No",
+            "Name",
+            "Phone",
+            "Gender",
+            "Age",
+            "LGA",
+            "Ward",
+            "Unit",
+            "Qualification",
+        ]
+    )
+
+
+    for member in members:
+
+        worksheet.append(
+            [
+                member.registration_no,
+                member.name,
+                member.phone,
+                member.gender,
+                member.age,
+                member.lga,
+                member.ward,
+                member.unit,
+                member.highest_qualification,
+            ]
+        )
+
+
+    file_path = (
+        UPLOADS_DIR
+        / "members.xlsx"
+    )
+
+    workbook.save(file_path)
+
 
     return FileResponse(
-        path,
-        filename="members.xlsx"
+        path=str(file_path),
+        media_type=(
+            "application/vnd.openxmlformats-"
+            "officedocument.spreadsheetml.sheet"
+        ),
+        filename="YPADN-members.xlsx",
     )
+
+
+# ============================================================
+# PDF EXPORT
+# ============================================================
+
 @router.get("/export/pdf")
 def export_pdf(
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
-    members = db.query(
-        Member
-    ).all()
 
-    path = "uploads/members.pdf"
+    members = (
+        db.query(Member)
+        .order_by(Member.id.asc())
+        .all()
+    )
 
-    pdf = SimpleDocTemplate(path)
+    file_path = (
+        UPLOADS_DIR
+        / "members.pdf"
+    )
 
-    data = [[
-        "Reg No",
-        "Name",
-        "Phone",
-        "LGA"
-    ]]
 
-    for v in members:
-        data.append([
-            v.registration_no,
-            v.name,
-            v.phone,
-            v.lga
-        ])
+    pdf = SimpleDocTemplate(
+        str(file_path)
+    )
+
+
+    data = [
+        [
+            "Registration No",
+            "Name",
+            "Phone",
+            "LGA",
+        ]
+    ]
+
+
+    for member in members:
+
+        data.append(
+            [
+                member.registration_no,
+                member.name,
+                member.phone,
+                member.lga,
+            ]
+        )
+
 
     table = Table(data)
 
+
     table.setStyle(
-        TableStyle([
-            (
-                "BACKGROUND",
-                (0, 0),
-                (-1, 0),
-                colors.green
-            ),
-            (
-                "TEXTCOLOR",
-                (0, 0),
-                (-1, 0),
-                colors.white
-            ),
-            (
-                "GRID",
-                (0, 0),
-                (-1, -1),
-                1,
-                colors.black
-            ),
-        ])
+        TableStyle(
+            [
+                (
+                    "BACKGROUND",
+                    (0, 0),
+                    (-1, 0),
+                    colors.HexColor(
+                        "#0B3D2E"
+                    ),
+                ),
+
+                (
+                    "TEXTCOLOR",
+                    (0, 0),
+                    (-1, 0),
+                    colors.white,
+                ),
+
+                (
+                    "GRID",
+                    (0, 0),
+                    (-1, -1),
+                    0.5,
+                    colors.grey,
+                ),
+
+                (
+                    "VALIGN",
+                    (0, 0),
+                    (-1, -1),
+                    "MIDDLE",
+                ),
+            ]
+        )
     )
 
-    pdf.build([table])
+
+    pdf.build(
+        [table]
+    )
+
 
     return FileResponse(
-        path,
-        filename="members.pdf"
+        path=str(file_path),
+        media_type="application/pdf",
+        filename="YPADN-members.pdf",
     )
