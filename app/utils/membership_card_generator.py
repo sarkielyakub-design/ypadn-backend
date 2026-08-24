@@ -1,6 +1,9 @@
 from datetime import datetime
+from functools import lru_cache
+from io import BytesIO
 import os
 
+from PIL import Image
 from reportlab.pdfgen import canvas
 from reportlab.lib import colors
 from reportlab.lib.colors import HexColor
@@ -109,6 +112,15 @@ WIDTH = 750
 
 HEIGHT = 500
 
+# Backgrounds only need twice the PDF's rendered dimensions for
+# sharp printing. JPEG is substantially smaller than the source PNGs.
+BACKGROUND_MAX_SIZE = (
+    WIDTH * 2,
+    HEIGHT * 2,
+)
+
+BACKGROUND_JPEG_QUALITY = 85
+
 
 # ============================================================
 # CARD BACKGROUNDS
@@ -209,6 +221,41 @@ def resolve_asset(
 # DRAW BACKGROUND
 # ============================================================
 
+@lru_cache(maxsize=4)
+def get_optimized_background(
+    image_path,
+    modified_ns,
+):
+    """
+    Return a print-quality JPEG version of a card background.
+
+    The modification time is part of the cache key, so replacing an
+    artwork file automatically invalidates its cached conversion.
+    """
+
+    del modified_ns
+
+    with Image.open(image_path) as image:
+
+        image = image.convert("RGB")
+
+        image.thumbnail(
+            BACKGROUND_MAX_SIZE,
+            Image.Resampling.LANCZOS,
+        )
+
+        output = BytesIO()
+
+        image.save(
+            output,
+            format="JPEG",
+            quality=BACKGROUND_JPEG_QUALITY,
+            optimize=True,
+            progressive=True,
+        )
+
+        return output.getvalue()
+
 def draw_background(
     c,
     image_path,
@@ -230,8 +277,13 @@ def draw_background(
             f"{image_path}"
         )
 
+    optimized_image = get_optimized_background(
+        image_path,
+        os.stat(image_path).st_mtime_ns,
+    )
+
     c.drawImage(
-        ImageReader(image_path),
+        ImageReader(BytesIO(optimized_image)),
         0,
         0,
         width=WIDTH,
@@ -584,21 +636,12 @@ def draw_member_information(
     stay inside their dotted guide lines.
     """
 
-    # ========================================================
-    # VALUE COLUMN
-    # ========================================================
-    #
-    # This starts AFTER the vertical divider.
-    #
-    # Previous value_x = 405
-    #
-    # New calibrated value_x = 365
-    #
-    # This prevents values from appearing too far
-    # inside the empty dotted area.
-    # ========================================================
-
-    value_x = 365
+    # The artwork is 1536 x 1024 and is scaled to 750 x 500.
+    # Its dotted value column begins at about x=453 in PDF
+    # coordinates. Keep enough padding to place values inside
+    # the marked green target area without colliding with labels.
+    value_x = 475
+    value_width = 125
 
 
     # ========================================================
@@ -613,8 +656,8 @@ def draw_member_information(
             "",
         ),
         value_x,
-        288,
-        165,
+        297,
+        value_width,
         font="Helvetica-Bold",
         font_size=8,
         min_font_size=6,
@@ -634,8 +677,8 @@ def draw_member_information(
             "",
         ),
         value_x,
-        262,
-        230,
+        269,
+        value_width,
         font="Helvetica-Bold",
         font_size=8,
         min_font_size=6,
@@ -655,8 +698,8 @@ def draw_member_information(
             "",
         ),
         value_x,
-        236,
-        90,
+        240,
+        value_width,
         font="Helvetica-Bold",
         font_size=8,
         min_font_size=6,
@@ -677,7 +720,7 @@ def draw_member_information(
         ),
         value_x,
         211,
-        60,
+        value_width,
         font="Helvetica-Bold",
         font_size=8,
         min_font_size=6,
@@ -697,8 +740,8 @@ def draw_member_information(
             "",
         ),
         value_x,
-        186,
-        210,
+        182,
+        value_width,
         font="Helvetica-Bold",
         font_size=8,
         min_font_size=6,
@@ -718,8 +761,8 @@ def draw_member_information(
             "",
         ),
         value_x,
-        162,
-        155,
+        152,
+        value_width,
         font="Helvetica-Bold",
         font_size=8,
         min_font_size=6,
@@ -739,8 +782,8 @@ def draw_member_information(
             "",
         ),
         value_x,
-        138,
-        155,
+        123,
+        value_width,
         font="Helvetica-Bold",
         font_size=8,
         min_font_size=6,
@@ -760,8 +803,8 @@ def draw_member_information(
             "",
         ),
         value_x,
-        114,
-        125,
+        94,
+        value_width,
         font="Helvetica-Bold",
         font_size=8,
         min_font_size=6,
@@ -779,8 +822,8 @@ def draw_member_information(
             member
         ),
         value_x,
-        90,
-        150,
+        66,
+        value_width,
         font="Helvetica-Bold",
         font_size=7.5,
         min_font_size=6,
@@ -1065,6 +1108,7 @@ def generate_membership_card(
             WIDTH,
             HEIGHT,
         ),
+        pageCompression=1,
     )
 
 
